@@ -24,10 +24,8 @@ def build_baseline_pipeline(model_params={}):
     :return: baseline pipeline
     :rtype: sklearn.pipeline.Pipeline
     """
-    feature_columns = ['pythag_adv',
-                       'pythag_recent_adv',
-                       'pythag_obj',
-                       'pythag_recent_obj',
+    feature_columns = ['pyexp_adv',
+                       'pyexp_obj',
                        'obj_rest',
                        'adv_rest',
                        'obj_travel_distance',
@@ -36,9 +34,9 @@ def build_baseline_pipeline(model_params={}):
     column_reducer = FunctionTransformer(reduce_columns, kw_args=kw_args)
     estimator = LogisticRegression(**model_params)
     calibrated_estimator = CalibratedClassifierCV(estimator, cv=3)
-    pipeline = make_pipeline(column_reducer, StandardScaler(),
-                             calibrated_estimator)
-    return pipeline
+    return make_pipeline(column_reducer,
+                         StandardScaler(),
+                         calibrated_estimator)
 
 
 def build_lgbm_pipeline(model_params={}):
@@ -53,8 +51,8 @@ def build_lgbm_pipeline(model_params={}):
     column_reducer = FunctionTransformer(drop_columns, kw_args=kw_args)
     estimator = LGBMClassifier(**model_params)
     calibrated_estimator = CalibratedClassifierCV(estimator, cv=3)
-    pipeline = make_pipeline(column_reducer, calibrated_estimator)
-    return pipeline
+    return make_pipeline(column_reducer,
+                         calibrated_estimator)
 
 
 def build_svc_pipeline(model_params={}):
@@ -69,6 +67,6 @@ def build_svc_pipeline(model_params={}):
     column_reducer = FunctionTransformer(drop_columns, kw_args=kw_args)
     estimator = NuSVC(**model_params)
     calibrated_estimator = CalibratedClassifierCV(estimator, cv=3)
-    pipeline = make_pipeline(column_reducer, StandardScaler(),
-                             calibrated_estimator)
-    return pipeline
+    return make_pipeline(column_reducer,
+                         StandardScaler(),
+                         calibrated_estimator)

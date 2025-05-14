@@ -3,6 +3,7 @@
 import polars as pl
 
 from src.data.features.game_stats import extract_game_points
+from src.data.features.scaler import build_adjusted_features
 from src.utils import shift_week_number
 
 
@@ -25,7 +26,7 @@ def calculate_points_for_against(points, side, period):
     )
 
 
-def calculate_pythag_stats(points, power=2.77, period='99i', suffix=""):
+def calculate_pyexp_stats(points, period='99i', suffix=""):
     """"""
     points_for = calculate_points_for_against(points, 'posteam', period)
     points_against = calculate_points_for_against(points, 'defteam', period)
@@ -40,7 +41,19 @@ def calculate_pythag_stats(points, power=2.77, period='99i', suffix=""):
         .select(
             pl.col('posteam').alias('team'),
             pl.col('season', 'week'),
-            (1 / (1 + (pl.col('points_against') / pl.col('points_for')).pow(power))).alias(f'pythag{suffix}'),
+            (1 / (1 + (pl.col('points_against') / pl.col('points_for')).pow(2.77))).alias(f'pyexp{suffix}'),
+        )
+    )
+
+
+def calculate_adj_pyexp_stats(points, suffix=""):
+    """"""
+    adjusted_points = build_adjusted_features(points, aggregation='cumsum')
+    return (
+        adjusted_points
+        .select(
+            'team', 'season', 'week',
+            (1 / (1 + (pl.col('points_game_scaled_posteam') / pl.col('points_game_scaled_defteam')).pow(2.77))).alias('adj_pyexp'),
         )
     )
 
@@ -48,17 +61,14 @@ def calculate_pythag_stats(points, power=2.77, period='99i', suffix=""):
 def build_pythag_features(plays):
     """"""
     points = extract_game_points(plays)
-    pythag = calculate_pythag_stats(points)
-    pythag_recent = calculate_pythag_stats(points, period='5i',
-                                           suffix='_recent')
-    return (
-        pythag
-        .join(
-            pythag_recent,
-            on=['team', 'season', 'week'],
-        )
-        .pipe(shift_week_number)
-    )
+    pyexp = calculate_pyexp_stats(points)
+    return pyexp.pipe(shift_week_number)
+    # adj_pyexp = calculate_adj_pyexp_stats(points)
+    # return (
+        # pyexp
+        # .join(adj_pyexp, on=['team', 'season', 'week'], how='inner')
+        # .pipe(shift_week_number)
+    # )
 
 
 if __name__ == '__main__':
@@ -73,6 +83,6 @@ if __name__ == '__main__':
                           how='vertical_relaxed')
     plays = clean_plays(raw_plays)
 
-    pythag = build_pythag_features(plays)
-    print(pythag.collect())
+    pyexp = build_pythag_features(plays)
+    print(pyexp.collect())
 

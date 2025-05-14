@@ -50,8 +50,8 @@ SCORING_METRIC = 'neg_brier_score'
 CV_TRAIN_SIZE = 10
 CV_TEST_SIZE = 3
 CV_SHIFT_SIZE = 2
-MAX_EVALS = 30
-EARLY_STOP_N = 15
+MAX_EVALS = 20
+EARLY_STOP_N = 10
 DEFAULT_PARAM_PREFIX = 'calibratedclassifiercv__estimator__'
 FEATURE_PRECISIONS = {
     "away_lon_delta": 2,

@@ -157,7 +157,7 @@ def make_rolling_data(game_data, stat_name, side):
     return rolled_data_obj, opp_agged_data, league_means
 
 
-def calculate_avg_adj_metric(rolled_data, opp_agged_data, league_means,
+def calculate_adj_metric(rolled_data, opp_agged_data, league_means,
                              stat_name, side):
     """Summary.
 
@@ -201,23 +201,43 @@ def calculate_avg_adj_metric(rolled_data, opp_agged_data, league_means,
             lg_avg=pl.col(f"{stat_name}_lg_resid") / pl.col(f"count_lg_resid"),
         )
         .with_columns(
-            adj_score=pl.col(stat_name) * (pl.col('lg_avg') / pl.col('opp_avg')),
-        )
-        .group_by([side, 'season', 'week'])
-        .agg(
-            pl.col('adj_score').sum().alias('adj_score_total'),
-            pl.col('count').sum().alias('count_total'),
-        )
-        .with_columns((pl.col('adj_score_total') / pl.col('count_total')).alias('avg_adj_score'))
-        .select(
-            pl.col(side).alias('team'),
-            'season', 'week',
-            pl.col('avg_adj_score').alias(f"{stat_name}_scaled_{side}"),
+            adj_metric=pl.col(stat_name) - pl.col('opp_avg'),
         )
     )
 
 
-def build_adjusted_features(feature_data):
+def aggregate_adj_metric(df, stat_name, side, aggregation):
+    """"""
+    totals = (
+        df
+        .group_by([side, 'season', 'week'])
+        .agg(
+            pl.col('adj_metric').sum().alias('adj_metric_total'),
+            pl.col('count').sum().alias('count_total'),
+        )
+    )
+    if aggregation == 'mean':
+        return (
+            totals
+            .with_columns((pl.col('adj_metric_total') / pl.col('count_total')).alias('avg_adj_metric'))
+            .select(
+                pl.col(side).alias('team'),
+                'season', 'week',
+                pl.col('avg_adj_metric').alias(f"{stat_name}_scaled_{side}"),
+            )
+        )
+    elif aggregation == 'cumsum':
+        return (
+            totals
+            .select(
+                pl.col(side).alias('team'),
+                'season', 'week',
+                pl.col('adj_metric_total').alias(f"{stat_name}_scaled_{side}"),
+            )
+        )
+
+
+def build_adjusted_features(feature_data, aggregation='mean'):
     """"""
     stat_name = feature_data.collect_schema().names()[-2]
     dfs_to_join = []
@@ -227,14 +247,20 @@ def build_adjusted_features(feature_data):
             stat_name,
             side,
         )
-        adjusted_data = calculate_avg_adj_metric(
+        adjusted_data = calculate_adj_metric(
             rolled_data,
             opp_agged_data,
             league_means,
             stat_name,
             side,
         )
-        dfs_to_join.append(adjusted_data)
+        agged_adj_data = aggregate_adj_metric(
+            adjusted_data,
+            stat_name,
+            side,
+            aggregation,
+        )
+        dfs_to_join.append(agged_adj_data)
     left_df, right_df = dfs_to_join
     final_df = (
         left_df
