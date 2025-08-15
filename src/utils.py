@@ -89,3 +89,56 @@ def shift_week_number(df):
             pl.exclude('team', 'season', 'week').shift(1).over(["team", "season"])
         )
     )
+
+
+def rename_adv_cols(col_name):
+    """Rename columns to specify away team feature.
+
+    pl.LazyFrame.rename doesn't accept kwargs, so we need separate functions
+    for home and away renaming.
+
+    :param str col_name: The column name to rename.
+    :return: The renamed column name.
+    :rtype: str
+    """
+    if col_name in ['team', 'season', 'week']:
+        return col_name
+    else:
+        return f'{col_name}_adv'
+
+
+def rename_obj_cols(col_name):
+    """Rename columns to specify home team feature.
+
+    :param str col_name: The column name to rename.
+    :return: The renamed column name.
+    :rtype: str
+    """
+    if col_name in ['team', 'season', 'week']:
+        return col_name
+    else:
+        return f'{col_name}_obj'
+
+
+def join_to_home_and_away(games, team_features, drop_swt=True):
+    """"""
+    joined = (
+        games
+        .join(
+            team_features.rename(rename_obj_cols),
+            left_on=['season', 'week', 'obj_team'],
+            right_on=['season', 'week', 'team'],
+            how='inner',
+        )
+        .join(
+            team_features.rename(rename_adv_cols),
+            left_on=['season', 'week', 'adv_team'],
+            right_on=['season', 'week', 'team'],
+            how='inner',
+        )
+    )
+    if drop_swt:
+        joined = joined.drop('season', 'week', 'obj_team', 'adv_team')
+    return joined
+
+

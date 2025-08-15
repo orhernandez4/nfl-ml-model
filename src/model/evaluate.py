@@ -5,6 +5,7 @@ import pandas as pd
 from mlxtend.evaluate.time_series import GroupTimeSeriesSplit, print_split_info
 from sklearn.model_selection import cross_validate
 from sklearn.calibration import calibration_curve
+from sklearn.inspection import permutation_importance
 from sklearn.metrics import (brier_score_loss,
                              log_loss,
                              f1_score,
@@ -108,3 +109,15 @@ def evaluate_model(pipeline, X, y, cv):
     scores['mean'] = scores.mean(axis=1)
     scores['std'] = scores.std(axis=1)
     return scores, estimators
+
+
+def evaluate_features(model, X_test, y_test, scoring_metric, n_repeats):
+    """"""
+    importances = permutation_importance(
+        model, X_test, y_test, scoring=scoring_metric, n_repeats=10
+    )
+    feature_importances = (
+        pd.DataFrame(importances.importances, index=X_test.columns)
+        .T
+    )
+    return feature_importances

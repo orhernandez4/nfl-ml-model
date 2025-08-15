@@ -156,6 +156,24 @@ def plot_confusion_matrix(scores, name, save_path):
     return
 
 
+def plot_feature_importances(importances, name, save_path):
+    """Make a seaborn box plot of feature importances.
+
+    :param importances: Feature importances.
+    :type importances: pd.DataFrame of shape (n_folds, n_features)
+    :param str name: Name of model.
+    :param str save_path: Path to save plots.
+    """
+    importances = importances.drop(columns=['season'])
+    set_plot_params()
+    fig, ax = plt.subplots(figsize=(5, 2))
+    sns.boxplot(data=importances, ax=ax, orient='h', palette='hellafresh',
+                whis=(0, 100), width=0.5)
+    fig.tight_layout()
+    fig.savefig(f"{save_path}/{name}_feature_importances.png")
+    return
+
+
 def make_and_save_plots(scores, name, save_path):
     """Make and save plots.
     

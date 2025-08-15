@@ -1,49 +1,36 @@
 """"""
 
 import os
+import sqlite3
 
 import polars as pl
+
+from src.utils import shift_week_number
 
 
 pl.Config.set_tbl_formatting("ASCII_MARKDOWN")
 
 
-def clean_plays(plays):
-    """Do some basic cleaning of the plays dataframe.
+def clean_raw_games(raw_games):
+    """Clean the raw games dataframe using polars.
 
-    :param pl.LazyFrame plays: The plays dataframe.
-    :return: A cleaned plays dataframe.
+    :param pl.LazyFrame raw_games: The raw games dataframe.
+    :return: A cleaned games dataframe.
     :rtype: pl.LazyFrame
     """
-    return plays.filter(
-        pl.col('posteam').is_not_null(),
-        pl.col('posteam') != "",
-        pl.col('season_type') == "REG",
-        pl.col('location') == "Home",
+    return (
+        raw_games
+        .filter(
+            pl.col('game_type') == 'REG',
+            pl.col('result').is_not_null(),
+        )
     )
 
 
-def reduce_to_normal_plays(plays):
-    """Reduce the plays dataframe to only include normal plays.
-
-    Normal plays are defined as those where the score and clock do not have
-    a significant impact on playcalling.
-
-    :param pl.LazyFrame plays: The plays dataframe.
-    :return: A reduced plays dataframe.
-    :rtype: pl.LazyFrame
-    """
-    return plays.filter(
-        pl.col('half_seconds_remaining') > 120,
-        pl.col('score_differential').abs() < 16,
-    )
-
-
-def reduce_raw_games(games, games_cols, min_year):
+def reduce_games(games, min_year):
     """Reduce the games dataframe using polars.
     
     :param pl.LazyFrame games: The games dataframe.
-    :param list games_cols: The columns to keep in the games dataframe.
     :param int min_year: The minimum year to keep in the games dataframe.
     :return: A reduced games dataframe.
     :rtype: pl.LazyFrame
@@ -56,148 +43,214 @@ def reduce_raw_games(games, games_cols, min_year):
             ~((pl.col('week') > 16) & (pl.col('season') < 2021)),
             ~((pl.col('week') > 17) & (pl.col('season') >= 2021))
         )
-        .drop(['game_type', 'location'])
-        .drop_nulls('result')
-        .select(games_cols)
     )
 
 
-def rename_away_cols(col_name):
-    """Rename columns to specify away team feature.
+def transform_home_away(games):
+    """Transform the home and away teams in the games dataframe.
 
-    pl.LazyFrame.rename doesn't accept kwargs, so we need separate functions
-    for home and away renaming.
-
-    :param str col_name: The column name to rename.
-    :return: The renamed column name.
-    :rtype: str
+    :param pl.LazyFrame games: The games dataframe.
+    :return: A transformed games dataframe with object and advantage teams.
+    :rtype: pl.LazyFrame
     """
-    if col_name in ['team', 'season', 'week']:
-        return col_name
-    else:
-        return f'{col_name}_away'
+    away_obj_games = (
+        games
+        .gather_every(2)
+        .rename(lambda col: col.replace('away', 'obj'))
+        .rename(lambda col: col.replace('home', 'adv'))
+        .with_columns(
+            pl.col("result") * -1,
+            obj_team_is_home=0
+        )
+    )
+    home_obj_games = (
+        games
+        .gather_every(2, offset=1)
+        .rename(lambda col: col.replace('home', 'obj'))
+        .rename(lambda col: col.replace('away', 'adv'))
+        .with_columns(obj_team_is_home=1)
+        .select(away_obj_games.collect_schema().names())
+    )
+    return (
+        pl.concat([away_obj_games, home_obj_games], how='vertical_relaxed')
+        .sort('game_id')
+    )
 
 
-def rename_home_cols(col_name):
-    """Rename columns to specify home team feature.
+def get_posteam_defteam_map(games):
+    """Get the mapping of posteam and defteam from the games dataframe.
 
-    :param str col_name: The column name to rename.
-    :return: The renamed column name.
-    :rtype: str
+    :param pl.LazyFrame games: The games dataframe.
+    :return: A dataframe with posteam and defteam mapping.
+    :rtype: pl.LazyFrame
     """
-    if col_name in ['team', 'season', 'week']:
-        return col_name
-    else:
-        return f'{col_name}_home'
+    posteams = games.select(
+        pl.col('pfr', 'season', 'week'),
+        pl.col('obj_team').alias('posteam'),
+        pl.col('adv_team').alias('defteam')
+    )
+    other_posteams = games.select(
+        pl.col('pfr', 'season', 'week'),
+        pl.col('adv_team').alias('posteam'),
+        pl.col('obj_team').alias('defteam')
+    )
+    return (
+        pl.concat([posteams, other_posteams], how='vertical')
+        .select('posteam', 'season', 'week', 'defteam', 'pfr')
+        .sort('posteam', 'season', 'week')
+    )
+
+
+def get_points_data(games):
+    """Get the points data from the games dataframe.
+
+    :param pl.LazyFrame games: The games dataframe.
+    :return: A dataframe with object team, advantage team, season, week,
+             object score, and advantage score.
+    :rtype: pl.LazyFrame
+    """
+    return games.select(
+        'obj_team', 'adv_team', 'season', 'week', 'obj_score', 'adv_score'
+    )
+
+
+def fix_pfr_team_names(df):
+    """Fix the team names in the dataframe to match PFR standards.
+
+    :param pl.LazyFrame df: The dataframe with team names to fix.
+    :return: A dataframe with fixed team names.
+    :rtype: pl.LazyFrame
+    """
+    mapping = {
+        'GNB': 'GB',
+        'KAN': 'KC',
+        'LAR': 'LA',
+        'LVR': 'LV',
+        'NOR': 'NO',
+        'NWE': 'NE',
+        'SDG': 'SD',
+        'SFO': 'SF',
+        'TAM': 'TB',
+    }
+    return df.with_columns(
+        pl.col('team').replace(mapping)
+    )
 
 
 if __name__ == '__main__':
     from src.data.raw.games import refresh_games_data
-    from src.data.raw.plays import refresh_plays_data
-    from src.data.features.travel import build_travel_features
-    from src.data.features.drive_stats import build_drive_stats_features
-    from src.data.features.game_stats import build_game_stats_features
+    from src.data.features.play_stats import build_play_stats_features
     from src.data.features.pythag_exp import build_pythag_features
+    from src.data.features.qb_stats import build_qb_stats_features
     from src.config.config import (TRAINING,
-                                   CURRENT_SEASON,
-                                   CURRENT_WEEK,
                                    RAW_DATA_URLS,
                                    PATHS)
 
     raw_games_path = PATHS['raw_games']
-    raw_plays_path = PATHS['raw_plays']
-    city_coords_path = PATHS['city_coordinates']
-    expected_values = PATHS['expected_values']
-    features_path = PATHS['features']
-    train_path = PATHS['train']
+    boxscore_stats_path = PATHS['boxscore_stats']
+    train_db_path = PATHS['train_db']
     min_year = TRAINING['min_year']
     holdout_year_start = TRAINING['holdout_year_start']
-    games_cols = TRAINING['games_cols']
     games_url = RAW_DATA_URLS['games']
-    plays_url = RAW_DATA_URLS['plays']
 
-    os.makedirs(features_path, exist_ok=True)
-    os.makedirs(train_path, exist_ok=True)
 
     print('Refreshing raw games data...')
     refresh_games_data(games_url, raw_games_path)
 
-    print('Refreshing raw play-by-play data...')
-    refresh_plays_data(CURRENT_SEASON, plays_url, raw_plays_path)
 
     print('Loading and processing raw data...')
-    seasons = range(2001, CURRENT_SEASON + 1)
-    paths = [raw_plays_path / f'play_by_play_{season}.parquet' for season in seasons]
-    raw_plays = pl.concat([pl.scan_parquet(p) for p in paths],
-                          how='vertical_relaxed')
-    plays = clean_plays(raw_plays)
     raw_games = pl.scan_csv(raw_games_path)
-    games = reduce_raw_games(raw_games, games_cols, min_year)
-    city_coords = pl.scan_csv(city_coords_path)
+    games = clean_raw_games(raw_games)
+    games = transform_home_away(games)
+    posteam_defteam_map = get_posteam_defteam_map(games)
+    points = get_points_data(games)
+    with sqlite3.connect(boxscore_stats_path) as conn:
+        player_offense = (
+            pl.read_database(
+                query="select * from player_offense",
+                connection=conn,
+            )
+            .lazy()
+            .pipe(fix_pfr_team_names)
+            .join(
+                posteam_defteam_map,
+                left_on=['pfr', 'team'],
+                right_on=['pfr', 'posteam'],
+                how='left'
+            )
+            .rename({'team': 'posteam'})
+        )
+        drives = (
+            pl.read_database(
+                query="select * from drives",
+                connection=conn,
+            )
+            .lazy()
+            .pipe(fix_pfr_team_names)
+            .join(
+                posteam_defteam_map,
+                left_on=['pfr', 'team'],
+                right_on=['pfr', 'posteam'],
+                how='left'
+            )
+            .rename({'team': 'posteam'})
+        )
+        starters = (
+            pl.read_database(
+                query="select * from starters",
+                connection=conn,
+                infer_schema_length=None,
+            )
+            .lazy()
+            .pipe(fix_pfr_team_names)
+            .join(
+                posteam_defteam_map,
+                left_on=['pfr', 'team'],
+                right_on=['pfr', 'posteam'],
+                how='left'
+            )
+            .rename({'team': 'posteam'})
+        )
+
 
     print('Building features...')
-    travel_features = build_travel_features(raw_games, city_coords)
-    game_stats_features = build_game_stats_features(plays)
-    drive_stats_features = build_drive_stats_features(plays)
-    pythag_features = build_pythag_features(plays)
-
     features = (
         games
-        .join(
-            travel_features,
-            on='game_id',
-            how='inner',
+        .select(
+            'game_id', 'season', 'week', 'obj_team', 'adv_team', 'result',
+            'obj_team_is_home',
+            rest_net=pl.col('obj_rest') - pl.col('adv_rest')
         )
-        .join(
-            game_stats_features.rename(rename_away_cols),
-            left_on=['season', 'week', 'away_team'],
-            right_on=['season', 'week', 'team'],
-            how='inner',
-        )
-        .join(
-            game_stats_features.rename(rename_home_cols),
-            left_on=['season', 'week', 'home_team'],
-            right_on=['season', 'week', 'team'],
-            how='inner',
-        )
-        .join(
-            drive_stats_features.rename(rename_away_cols),
-            left_on=['season', 'week', 'away_team'],
-            right_on=['season', 'week', 'team'],
-            how='inner',
-        )
-        .join(
-            drive_stats_features.rename(rename_home_cols),
-            left_on=['season', 'week', 'home_team'],
-            right_on=['season', 'week', 'team'],
-            how='inner',
-        )
-        .join(
-            pythag_features.rename(rename_away_cols),
-            left_on=['season', 'week', 'away_team'],
-            right_on=['season', 'week', 'team'],
-            how='inner',
-        )
-        .join(
-            pythag_features.rename(rename_home_cols),
-            left_on=['season', 'week', 'home_team'],
-            right_on=['season', 'week', 'team'],
-            how='inner',
-        )
+        .pipe(build_play_stats_features, drives=drives)
+        .pipe(build_pythag_features, points=points, drives=drives)
+        .pipe(build_qb_stats_features, player_offense=player_offense,
+              starters=starters)
+        .pipe(reduce_games, min_year=min_year)
         .sort('game_id')
     )
-    features.sink_csv(features_path / 'features.csv')
+    print(features.collect().glimpse())
 
-    print('Building training and test sets...')
+
+    print('Writing train and test datasets...')
     all_training_data = (
         features
         .with_columns(
-            pl.when(pl.col('result') > 0).then(1).otherwise(0).alias('target'),
-            pl.when(pl.col('season') >= holdout_year_start).then(1).otherwise(0).alias('holdout'),
+            pl.when(pl.col('result') > 0).then(1).otherwise(0).alias('target')
         )
-        .drop(['week', 'away_team', 'home_team', 'result'])
+        .sort('season', 'week')
+        .drop(['week', 'obj_team', 'adv_team', 'result', 'game_id'])
     )
-    train = all_training_data.filter(pl.col('holdout') == 0).drop('holdout')
-    test = all_training_data.filter(pl.col('holdout') == 1).drop('holdout')
-    train.sink_csv(train_path / 'train.csv')
-    test.sink_csv(train_path / 'test.csv')
+    train = all_training_data.filter(pl.col('season') < holdout_year_start)
+    test = all_training_data.filter(pl.col('season') >= holdout_year_start)
+    train.collect().write_database(
+        table_name='train',
+        connection=f"sqlite:///{train_db_path}",
+        engine='sqlalchemy',
+        if_table_exists='replace'
+    )
+    test.collect().write_database(
+        table_name='test',
+        connection=f"sqlite:///{train_db_path}",
+        engine='sqlalchemy',
+        if_table_exists='replace'
+    )

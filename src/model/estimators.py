@@ -5,10 +5,8 @@ Working model: SWIFT
 """
 
 import pandas as pd
-import numpy as np
 from sklearn.pipeline import make_pipeline
-from sklearn.preprocessing import FunctionTransformer, OneHotEncoder, StandardScaler
-from sklearn.compose import ColumnTransformer
+from sklearn.preprocessing import FunctionTransformer, StandardScaler
 from sklearn.linear_model import LogisticRegression
 from lightgbm import LGBMClassifier
 from sklearn.svm import NuSVC
@@ -24,12 +22,9 @@ def build_baseline_pipeline(model_params={}):
     :return: baseline pipeline
     :rtype: sklearn.pipeline.Pipeline
     """
-    feature_columns = ['pyexp_adv',
-                       'pyexp_obj',
-                       'obj_rest',
-                       'adv_rest',
-                       'obj_travel_distance',
-                       'adv_travel_distance']
+    feature_columns = ['log5_pyexp',
+                       'rest_net',
+                       'obj_team_is_home']
     kw_args = {'columns': feature_columns}
     column_reducer = FunctionTransformer(reduce_columns, kw_args=kw_args)
     estimator = LogisticRegression(**model_params)

@@ -186,9 +186,10 @@ def calculate_adj_metric(rolled_data, opp_agged_data, league_means,
         .join(
             league_means,
             on=['season', 'week'],
-            how='left',
+            how='full',
             suffix='_lg'
         )
+        .fill_null(strategy='forward')
         .with_columns(
             (pl.col(f"{stat_name}_{opp_side}") - pl.col(stat_name)).alias(f"{stat_name}_{opp_side}_resid"),
             (pl.col(f"count_{opp_side}") - pl.col('count')).alias(f"count_{opp_side}_resid"),
@@ -201,7 +202,10 @@ def calculate_adj_metric(rolled_data, opp_agged_data, league_means,
             lg_avg=pl.col(f"{stat_name}_lg_resid") / pl.col(f"count_lg_resid"),
         )
         .with_columns(
-            adj_metric=pl.col(stat_name) - pl.col('opp_avg'),
+            adj_metric=(pl.col(stat_name) - pl.col('opp_avg')),
+            # adj_metric=pl.col(stat_name) * (pl.col('lg_avg') / pl.col('opp_avg')),
+            # adj_metric=pl.col(stat_name) * (pl.lit(0.1) * (pl.col('opp_avg') - pl.col('lg_avg'))).exp(),
+            # adj_metric=pl.col(stat_name),
         )
     )
 
@@ -223,7 +227,7 @@ def aggregate_adj_metric(df, stat_name, side, aggregation):
             .select(
                 pl.col(side).alias('team'),
                 'season', 'week',
-                pl.col('avg_adj_metric').alias(f"{stat_name}_scaled_{side}"),
+                pl.col('avg_adj_metric').alias(f"{stat_name}_{side}"),
             )
         )
     elif aggregation == 'cumsum':
@@ -232,7 +236,7 @@ def aggregate_adj_metric(df, stat_name, side, aggregation):
             .select(
                 pl.col(side).alias('team'),
                 'season', 'week',
-                pl.col('adj_metric_total').alias(f"{stat_name}_scaled_{side}"),
+                pl.col('adj_metric_total').alias(f"{stat_name}_{side}"),
             )
         )
 
@@ -270,3 +274,13 @@ def build_adjusted_features(feature_data, aggregation='mean'):
         .sort('team', 'season', 'week')
     )
     return final_df
+
+
+if __name__ == "__main__":
+    pl.Config(tbl_rows=20)
+    test_df = pl.read_csv(
+        '/Users/vandelay/backup-vandelay/projects/nfl-modeling/data/scaler-test-data.csv'
+    )
+    print(test_df)
+    adjusted_features = build_adjusted_features(test_df, aggregation='mean')
+    print(adjusted_features)

@@ -22,15 +22,13 @@ import pathlib
 
 PROJ_ROOT = pathlib.Path(__file__).parents[2].absolute()
 PATHS = {
+    'pfr_data': PROJ_ROOT / 'data' / 'pfr',
     'raw_games': PROJ_ROOT / 'data' / 'raw' / 'games.csv',
-    'raw_plays': PROJ_ROOT / 'data' / 'raw' / 'plays',
-    'features': PROJ_ROOT / 'data' / 'features',
     'train': PROJ_ROOT / 'data' / 'train',
     'results': PROJ_ROOT / 'data' / 'results',
     'prediction': PROJ_ROOT / 'data' / 'prediction',
-    'features_src': PROJ_ROOT / 'src' / 'data' / 'features',
-    'city_coordinates': PROJ_ROOT / 'data' / 'ancillary' / 'city-coordinates.csv',
-    'expected_values': PROJ_ROOT / 'data' / 'ancillary' / 'expected-values.csv',
+    'boxscore_stats': PROJ_ROOT / 'data' / 'boxscore-stats.db',
+    'train_db': PROJ_ROOT / 'data' / 'train.db',
 }
 RAW_DATA_URLS = {
     "games": "https://raw.githubusercontent.com/nflverse/nfldata/master/data/games.csv",
@@ -41,8 +39,8 @@ RAW_DATA_URLS = {
 CURRENT_SEASON = 2024
 CURRENT_WEEK = 99
 TRAINING = {
-    "min_year": 2001,
-    "holdout_year_start": 2021,
+    "min_year": 1999,
+    "holdout_year_start": 2022,
     "games_cols": ["game_id", "season", "week", "away_team", "home_team",
                    "away_rest", "home_rest", "result"]
 }
@@ -50,8 +48,8 @@ SCORING_METRIC = 'neg_brier_score'
 CV_TRAIN_SIZE = 10
 CV_TEST_SIZE = 3
 CV_SHIFT_SIZE = 2
-MAX_EVALS = 20
-EARLY_STOP_N = 10
+MAX_EVALS = 15
+EARLY_STOP_N = 70
 DEFAULT_PARAM_PREFIX = 'calibratedclassifiercv__estimator__'
 FEATURE_PRECISIONS = {
     "away_lon_delta": 2,

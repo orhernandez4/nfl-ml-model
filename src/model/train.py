@@ -1,26 +1,26 @@
 """Train and evaluate models."""
 
-import json
 import datetime
 import os
 import joblib
+import sqlite3
 
-import numpy as np
 import pandas as pd
-from sklearn.preprocessing import FunctionTransformer
-from sklearn.model_selection import GroupKFold
+from sklearn.model_selection import LeaveOneGroupOut
 
-from src.model.process import preprocess, transform_home_away_structure
 from src.model.estimators import (build_baseline_pipeline,
                                   build_lgbm_pipeline,
                                   build_svc_pipeline)
 from src.model.hyperoptimize import hyperoptimize
-from src.model.evaluate import custom_cv, evaluate_model, compile_scores
-from src.model.predict import voting_classifier
-from src.plot.plot import make_and_save_plots, plot_test_calibration
+from src.model.evaluate import (custom_cv,
+                                evaluate_model,
+                                evaluate_features,
+                                compile_scores)
+from src.plot.plot import (make_and_save_plots,
+                           plot_test_calibration,
+                           plot_feature_importances)
 
 from src.config.config import (PATHS,
-                               FEATURE_PRECISIONS,
                                CV_TRAIN_SIZE,
                                CV_TEST_SIZE,
                                CV_SHIFT_SIZE,
@@ -54,6 +54,21 @@ def make_save_path(results_path):
     return save_path
 
 
+def map_seasons_to_groups(X_train):
+    """"""
+    seasons = X_train['season'].unique()
+    min_year = seasons.min()
+    max_year = seasons.max() + 1
+    replacements = {}
+    for i, start_year in enumerate(range(min_year, max_year, 3)):
+        replacements[start_year] = i + 1
+        replacements[start_year + 1] = i + 1
+        replacements[start_year + 2] = i + 1
+    X_train['season'] = X_train['season'].replace(replacements)
+    folds = X_train['season'].unique()[-1]
+    return X_train, folds 
+
+
 def evaluate_train_save(model_name, model, X_train, y_train, X_test, y_test,
                         cv, save_path, hyperopt=False, scoring_metric=None,
                         space=None, max_evals=None, early_stop_n=None):
@@ -71,6 +86,9 @@ def evaluate_train_save(model_name, model, X_train, y_train, X_test, y_test,
     scores.to_csv(f"{save_path}/{model_name}_scores.csv")
     make_and_save_plots(scores, model_name, save_path)
     model.fit(X_train, y_train)
+    feature_importances = evaluate_features(model, X_test, y_test,
+                                            scoring_metric, n_repeats=10)
+    plot_feature_importances(feature_importances, model_name, save_path)
     y_pred = model.predict(X_test)
     y_pred_proba = model.predict_proba(X_test)[:, 1]
     scores = compile_scores(y_test, y_pred, y_pred_proba)
@@ -83,17 +101,24 @@ def evaluate_train_save(model_name, model, X_train, y_train, X_test, y_test,
 
 
 if __name__ == "__main__":
-    train_path = PATHS['train']
+    train_path = PATHS['train_db']
     results_path = PATHS['results']
     save_path = make_save_path(results_path)
 
-    X_train = pd.read_csv(train_path / "train.csv", index_col=0)
-    y_train = X_train.pop('target')
-    X_train, y_train = transform_home_away_structure(X_train, y_train)
+    with sqlite3.connect(train_path) as conn:
+        X_train = pd.read_sql(
+            sql="SELECT * FROM train",
+            con=conn,
+        )
+        y_train = X_train.pop('target')
+        X_test = pd.read_sql(
+            sql="SELECT * FROM test",
+            con=conn,
+        )
+        y_test = X_test.pop('target')
 
-    X_test = pd.read_csv(train_path / "test.csv", index_col=0)
-    y_test = X_test.pop('target')
-    X_test, y_test = transform_home_away_structure(X_test, y_test)
+    # X_train, folds = map_seasons_to_groups(X_train) 
+    # cv = LeaveOneGroupOut()
 
     cv = custom_cv(CV_TRAIN_SIZE, CV_TEST_SIZE, CV_SHIFT_SIZE)
 
@@ -118,4 +143,3 @@ if __name__ == "__main__":
                         cv, save_path, hyperopt=True, scoring_metric=SCORING_METRIC,
                         space=LIGHTGBM_SPACE, max_evals=MAX_EVALS,
                         early_stop_n=EARLY_STOP_N)
-

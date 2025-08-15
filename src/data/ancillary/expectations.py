@@ -17,6 +17,9 @@ def preprocess_plays(raw_plays):
     """
     return (raw_plays
             .query('posteam != "" and posteam != "None"')
+            .query('season_type == "REG"')
+            .query('location == "Home"')
+            .query('down.notnull()')
             .query('yrdln.notnull()'))
 
 
