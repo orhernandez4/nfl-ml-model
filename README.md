@@ -11,7 +11,14 @@ Development for this repo has been somewhat haphazard. I've now removed a signif
 I've also rewritten all of the data functions using polars, so it no longer takes 5 minutes to build all of the features. Yay.
 
 ## Getting started
-Simply `bash run.sh` and you're off to the races!
+There are two ways to get started:
+
+1. Install the [uv package manager](https://docs.astral.sh/uv/getting-started/installation/) for Python, then simply `bash run.sh` and you're off to the races!
+
+2. Or, you can manage your own venv and install the dependencies in `requirements.txt`, then:
+- Run `src/data/build.py` to build training and testing datasets
+- Run `src/models/train.py` to train the model
+- Run `src/data/predict/predict.py` to generate predictions for upcoming games
 
 After training, you can view model scores in `/data/results`
 
@@ -36,11 +43,9 @@ A: Data leakage! These metrics are derived from all currently available NFL data
 
 ## Current engineered features
 - home/away rest
-- travel distances
-- adjusted points per game
-- adjusted points per drive
-
-Feature engineering sometimes makes adjustments for league averages and opponent strength. Adjusted features are expressed in terms of median absolute deviations from the adjusted team means for that stat.
+- adjusted yards per play
+- pythagorean expectation
+- QB rating
 
 ## Training procedure
 SWIFT does everything possible to avoid data leakage. It should never get a glimpse into the future.
@@ -57,9 +62,6 @@ SWIFT does everything possible to avoid data leakage. It should never get a glim
 - ~~Auto-generate API docs with Sphinx~~
 - Complete documentation for all modules and functions
 - Account for quarterback injuries
-- Tidy up some bits of rushed code
-- Complete unit tests
 - Expand model evaluation to include tracking optimal hyperparameters
 - Write bespoke time series cross validation windows that look forward **and** backward
-- Add a mixed-effects logreg model that controls for season
-- Add a regression model that predicts game score differentials
+- Use QLattice to engineer new QB rating feature
