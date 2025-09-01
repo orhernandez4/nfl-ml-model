@@ -53,6 +53,7 @@ def transform_home_away(games):
     :return: A transformed games dataframe with object and advantage teams.
     :rtype: pl.LazyFrame
     """
+    games = games.sort('game_id')
     away_obj_games = (
         games
         .gather_every(2)
@@ -101,8 +102,8 @@ def get_posteam_defteam_map(games):
     )
 
 
-def get_points_data(games):
-    """Get the points data from the games dataframe.
+def get_game_outcomes(games):
+    """Get the scores data from the games dataframe.
 
     :param pl.LazyFrame games: The games dataframe.
     :return: A dataframe with object team, advantage team, season, week,
@@ -163,7 +164,7 @@ if __name__ == '__main__':
     games = clean_raw_games(raw_games)
     games = transform_home_away(games)
     posteam_defteam_map = get_posteam_defteam_map(games)
-    points = get_points_data(games)
+    scores = get_game_outcomes(games)
     with sqlite3.connect(boxscore_stats_path) as conn:
         player_offense = (
             pl.read_database(
@@ -222,13 +223,13 @@ if __name__ == '__main__':
             rest_net=pl.col('obj_rest') - pl.col('adv_rest')
         )
         .pipe(build_play_stats_features, drives=drives)
-        .pipe(build_pythag_features, points=points, drives=drives)
+        .pipe(build_pythag_features, scores=scores)
         .pipe(build_qb_stats_features, player_offense=player_offense,
               starters=starters)
         .pipe(reduce_games, min_year=min_year)
         .sort('game_id')
     )
-    print(features.collect().glimpse())
+    # print(features.collect().glimpse())
 
 
     print('Writing train and test datasets...')

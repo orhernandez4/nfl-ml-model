@@ -8,78 +8,54 @@ from src.data.features.scaler import build_adjusted_features
 from src.utils import shift_week_number, join_to_home_and_away
 
 
-def get_team_points(games):
-    """Extracts team points from game data.
+def get_points_for_against(scores):
+    """Transform scores data into points for and against format.
 
-    :param pl.LazyFrame games: Polars LazyFrame containing game data.
-    :return: Team points data.
+    :param pl.LazyFrame scores: Polars LazyFrame containing game scores.
+    :return: Transformed scores with points for and against.
     :rtype: pl.LazyFrame
     """
-    posteams = games.select(
-        pl.col('season', 'week'),
-        pl.col('obj_team').alias('posteam'),
-        pl.col('adv_team').alias('defteam'),
-        pl.col('obj_score').alias('points_game')
+    obj_scores = scores.select(
+        'obj_team', 'season', 'week', 'adv_team', 'obj_score', 'adv_score'
     )
-    other_posteams = games.select(
+    adv_scores = scores.select(
+        pl.col('adv_team').alias('obj_team'),
         pl.col('season', 'week'),
-        pl.col('adv_team').alias('posteam'),
-        pl.col('obj_team').alias('defteam'),
-        pl.col('adv_score').alias('points_game')
+        pl.col('obj_team').alias('adv_team'),
+        pl.col('adv_score').alias('obj_score'),
+        pl.col('obj_score').alias('adv_score'),
     )
     return (
-        pl.concat([posteams, other_posteams], how='vertical')
-        .select('posteam', 'season', 'week', 'defteam', 'points_game')
-        .sort('posteam', 'season', 'week')
+        pl.concat([obj_scores, adv_scores], how='vertical')
+        .sort('obj_team', 'season', 'week')
     )
 
 
-def get_offense_points(drives):
-    """Extracts offensive points from drives data.
+def roll_points_for_against(team_scores):
+    """Calculates rolling points for and against over a specified period.
 
-    :param pl.LazyFrame drives: Polars LazyFrame containing drives data.
-    :return: Offensive points data.
+    :param pl.LazyFrame team_scores: Polars LazyFrame containing team scores.
+    :return: Rolling points for and against.
     :rtype: pl.LazyFrame
     """
-    pts_mapping = {'Touchdown': 7, 'Field goal': 3}
-    int_mapping = {'Interception': 1}
-    stats = (
-        drives
-        .with_columns(
-            pl.col('Result').replace_strict(pts_mapping, default=0).alias('Points'),
-        )
-        .group_by('posteam', 'season', 'week', 'defteam')
-        .agg(
-            pl.sum('Points').alias('points_game'),
-        )
-    )
-    return stats.sort('posteam', 'season', 'week')
-
-
-def calculate_points_for_against(points, side, period):
-    """Calculates points for or against a team over a specified period.
-
-    :param pl.LazyFrame points: Polars LazyFrame containing points data.
-    :param str side: 'posteam' for points for, 'defteam' for points against.
-    :param str period: Rolling period for aggregation.
-    :return: Points for or against data.
-    :rtype: pl.LazyFrame
-    """
-    alias = 'points_for' if side == 'posteam' else 'points_against'
-    return (
-        points
-        .sort(side, 'season', 'week')
+    rolling_team_scores = (
+        team_scores
+        .sort('obj_team', 'season', 'week')
         .with_row_index('index')
         .rolling(
             index_column='index',
-            group_by=[side, 'season'],
-            period=period,
+            group_by=['obj_team', 'season'],
+            period='99i',
         )
         .agg(
             pl.col('week').last(),
-            pl.col('points_game').sum().alias(alias),
+            pl.col('obj_score').sum().alias('points_for'),
+            pl.col('adv_score').sum().alias('points_against'),
         )
+        .sort('index')
+        .select('obj_team', 'season', 'week', 'points_for', 'points_against')
     )
+    return rolling_team_scores
 
 
 def calculate_pyexp_stats(points, period='99i', suffix=""):
@@ -91,18 +67,10 @@ def calculate_pyexp_stats(points, period='99i', suffix=""):
     :return: Pythagorean expectation statistics.
     :rtype: pl.LazyFrame
     """
-    points_for = calculate_points_for_against(points, 'posteam', period)
-    points_against = calculate_points_for_against(points, 'defteam', period)
     return (
-        points_for
-        .join(
-            points_against,
-            left_on=['posteam', 'season', 'week'],
-            right_on=['defteam', 'season', 'week'],
-            how='inner',
-        )
+        points
         .select(
-            pl.col('posteam').alias('team'),
+            pl.col('obj_team').alias('team'),
             pl.col('season', 'week'),
             (1 / (1 + (pl.col('points_against') / pl.col('points_for')).pow(2.77))).alias(f'pyexp{suffix}'),
         )
@@ -142,20 +110,19 @@ def convert_to_log5(games, feature_name):
     )
 
 
-def build_pythag_features(games, points, drives):
+def build_pythag_features(games, scores):
     """Builds Pythagorean expectation features for NFL games.
 
     :param pl.LazyFrame games: Polars LazyFrame containing game data.
-    :param pl.LazyFrame points: Polars LazyFrame containing points data.
+    :param pl.LazyFrame scores: Polars LazyFrame containing scores data.
     :param pl.LazyFrame drives: Polars LazyFrame containing drives data.
     :return: Games DataFrame with Pythagorean expectation features added.
     :rtype: pl.LazyFrame
     """
-    team_points = get_team_points(points)
-    team_drives_points = get_offense_points(drives)
-    pyexps = calculate_pyexp_stats(team_points)
-    pyexps_offense = calculate_pyexp_stats(team_drives_points, suffix='_offense')
-    for f in [(pyexps, "pyexp"), (pyexps_offense, "pyexp_offense")]:
+    team_points = get_points_for_against(scores)
+    rolling_team_points = roll_points_for_against(team_points)
+    pyexps = calculate_pyexp_stats(rolling_team_points)
+    for f in [(pyexps, "pyexp")]:
         feature = (
             f[0]
             .pipe(shift_week_number)
