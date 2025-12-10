@@ -1,110 +1,128 @@
-"""Helper functions for building features to make predictions on."""
+"""Helper functions and script for producing model predictions."""
 
-import os
-import joblib
+from pathlib import Path
+import sqlite3
 
 import numpy as np
 import pandas as pd
+from scipy.stats import mode
+import joblib
 
-from src.utils import map_features_to_games, walk_features_dir
-from src.config.config import (PATHS,
-                               TRAINING,
-                               CURRENT_SEASON,
-                               CURRENT_WEEK)
+from src.config.config import PATHS
+from src.model.estimators import (
+    build_baseline_pipeline,
+    build_svc_pipeline,
+    build_lgbm_pipeline,
+)
 
 
-def get_most_recent_dir(path):
-    """Get the largest dir name. Assumes that the dir names are integer
-    timestamps.
+def voting_classifier(estimators, X, type):
+    """Generate predictions for a set of fitted estimators.
+
+    For soft voting, return the average of the predicted probabilities.
+    For hard voting, return the most common class prediction.
     
-    :param str path: Path to the parent dir to search.
-    :return: Path to the most recent dir.
-    :rtype: str
+    :param list estimators: fitted estimators
+    :param pd.DataFrame X: features
+    :param str type: type of prediction. must be 'soft' or 'hard'
+    :return: predictions
+    :rtype: np.ndarray
     """
-    most_recent_dir = sorted(os.listdir(path))[-1]
-    results_path = os.path.join(path, most_recent_dir)
-    return results_path
-
-
-def merge_most_recent_feature(games, feature, current_season, current_week):
-    """Merge the most recent feature to the games df.
-    
-    :param games: Raw games df.
-    :type games: pd.DataFrame of shape (n_games, n_cols)
-    :param feature: Feature df. Index should be either game_id or season/team/week.
-    :type feature: pd.DataFrame of shape (n_weeks, n_cols)
-    :param int current_season: Current NFL season.
-    :param int current_week: Current NFL week.
-    :return: Games df with the most recent feature merged.
-    :rtype: pd.DataFrame of shape (n_games, n_cols)
-    """
-    first_col = feature.columns[0]
-    if first_col == 'game_id':
-        games = games.merge(feature, on='game_id', how='inner')
-        return games
+    if type == 'soft':
+        return np.mean([est.predict_proba(X)[:, 1] for est in estimators], axis=0)
+    elif type == 'hard':
+        # scipy.stats.mode returns (mode, count); we want just the mode array
+        return mode([est.predict(X) for est in estimators], axis=0)[0]
     else:
-        feature = (feature
-                   .query('season == @current_season')
-                   .groupby('team')
-                   .tail(1)
-                   .assign(week=current_week))
-        games = map_features_to_games(games, feature)
-        return games
+        raise ValueError("type must be 'soft' or 'hard'")
 
 
-def build_prediction_data(upcoming, features_path):
-    """Build the data to make predictions on.
-    
-    :param upcoming: Upcoming games df.
-    :type upcoming: pd.DataFrame of shape (n_games, n_cols)
-    :param str features_path: Path to the features dir.
-    :return: Data to make predictions on.
-    :rtype: pd.DataFrame of shape (n_games, n_cols)
+def load_train_test_from_db():
+    """Load train and test tables from the train.db SQLite database.
+
+    Uses PATHS['train_db'] from src.config.config.
+
+    :return: (train_df, test_df)
+    :rtype: tuple[pd.DataFrame, pd.DataFrame]
     """
-    for file_path in walk_features_dir(features_path):
-        feature = pd.read_csv(file_path)
-        upcoming = merge_most_recent_feature(upcoming, feature,
-                                             CURRENT_SEASON, CURRENT_WEEK)
-    upcoming = (upcoming
-                .drop(columns=['away_team', 'home_team', 'season', 'week'])
-                .set_index('game_id')
-                .sort_index())
-    upcoming.columns = (upcoming.columns
-                        .str.replace('home', 'obj')
-                        .str.replace('away', 'adv'))
-    upcoming['obj_team_is_home'] = 1
-    return upcoming
+    train_db_path = PATHS["train_db"]
+    with sqlite3.connect(train_db_path) as conn:
+        train_df = pd.read_sql("SELECT * FROM train", conn)
+        test_df = pd.read_sql("SELECT * FROM test", conn)
+    return train_df, test_df
+
+
+def load_or_train_models(X_train, y_train):
+    """Load models from disk if available, otherwise train and save them.
+
+    Models are stored under the 'models/' directory as:
+      - baseline.pkl
+      - svc.pkl
+      - lgbm.pkl
+
+    :param pd.DataFrame X_train: training features
+    :param pd.Series y_train: training target
+    :return: list of fitted estimators
+    :rtype: list
+    """
+    models_dir = Path("models")
+    models_dir.mkdir(parents=True, exist_ok=True)
+
+    model_builders = {
+        "baseline": build_baseline_pipeline,
+        "svc": build_svc_pipeline,
+        "lgbm": build_lgbm_pipeline,
+    }
+
+    fitted_estimators = []
+
+    for name, builder in model_builders.items():
+        model_path = models_dir / f"{name}.pkl"
+        if model_path.exists():
+            # Load previously saved model
+            model = joblib.load(model_path)
+        else:
+            # Build and train a new model, then save it
+            model = builder()
+            model.fit(X_train, y_train)
+            joblib.dump(model, model_path)
+        fitted_estimators.append(model)
+
+    return fitted_estimators
+
+
+def main():
+    # 1. Load train + test data from SQLite
+    train_df, test_df = load_train_test_from_db()
+
+    # 2. Separate features and target
+    #    We assume 'target' is the label column (as created in build.py)
+    feature_cols = [c for c in train_df.columns if c != "target"]
+    X_train = train_df[feature_cols]
+    y_train = train_df["target"]
+    X_test = test_df[feature_cols]
+
+    # 3. Load or train the models (baseline, svc, lightgbm)
+    estimators = load_or_train_models(X_train, y_train)
+
+    # 4. Generate predictions:
+    #    - soft voting → average predicted probability for class 1
+    #    - hard voting → majority-vote class label
+    y_prob = voting_classifier(estimators, X_test, type="soft")
+    y_pred = voting_classifier(estimators, X_test, type="hard")
+
+    # 5. Attach predictions to the test dataframe
+    out_df = test_df.copy()
+    # y_prob is shape (n_samples,), y_pred is shape (1, n_samples) from mode()
+    out_df["pred_prob"] = np.asarray(y_prob).ravel()
+    out_df["pred_label"] = np.asarray(y_pred).ravel()
+
+    # 6. Save predictions
+    out_path = Path("data/predictions.csv")
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_df.to_csv(out_path, index=False)
+    print(f"Saved {len(out_df)} predictions to {out_path}")
 
 
 if __name__ == "__main__":
-    raw_games_path = PATHS['raw_games']
-    features_path = PATHS['features']
-    games_cols = TRAINING['games_cols']
-    results_path = PATHS['results']
-    prediction_data_path = PATHS['prediction']
-
-
-    games = pd.read_csv(raw_games_path)
-    upcoming = (games
-                .loc[games['result'].isnull()]
-                .filter(games_cols))
-    prediction_data = build_prediction_data(upcoming, features_path)
-    readable_data = prediction_data.copy()
-
-    most_recent_results = get_most_recent_dir(results_path)
-    model = joblib.load(os.path.join(most_recent_results, 'svc_model.pkl'))
-    predictions = model.predict_proba(prediction_data)
-    readable_data[['svc_away_win_prob', 'svc_home_win_prob']] = predictions
-
-    model = joblib.load(os.path.join(most_recent_results, 'lightgbm_model.pkl'))
-    predictions = model.predict_proba(prediction_data)
-    readable_data[['swift_away_win_prob', 'swift_home_win_prob']] = predictions
-
-    readable_data.columns = (readable_data.columns
-                             .str.replace('obj', 'home')
-                             .str.replace('adv', 'away'))
-    readable_data = readable_data.round(3)
-
-    os.makedirs(prediction_data_path, exist_ok=True)
-    filename = f'{CURRENT_SEASON}_week_{CURRENT_WEEK}_predictions.csv'
-    readable_data.to_csv(f'{prediction_data_path}/{filename}')
+    main()
