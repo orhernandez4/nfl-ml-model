@@ -189,5 +189,3 @@ def make_and_save_plots(scores, name, save_path):
     plot_train_calibration(prob_true, prob_pred, name, save_path)
     plot_confusion_matrix(conf_matrix_scores, name, save_path)
     return
-
-
