@@ -1,0 +1,14 @@
+{
+	"folders": [
+		{
+			"path": "../../../../../../../Downloads"
+		},
+		{
+			"name": "nfl-modeling",
+			"path": "../../.."
+		}
+	],
+	"settings": {
+		"python-envs.defaultEnvManager": "ms-python.python:system"
+	}
+}
